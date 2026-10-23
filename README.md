@@ -160,7 +160,7 @@ Cross-building on Debian trixie (amd64), as CI does:
 
 ```sh
 sudo dpkg --add-architecture arm64 && sudo apt update
-sudo apt install build-essential crossbuild-essential-arm64 debhelper dh-dkms device-tree-compiler
+sudo apt install build-essential crossbuild-essential-arm64 debhelper dh-dkms device-tree-compiler libc6:arm64
 dpkg-buildpackage -aarm64 -b -us -uc
 ```
 

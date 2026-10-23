@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install cross toolchain
         run: |
@@ -22,7 +22,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential crossbuild-essential-arm64 \
-            debhelper dh-dkms device-tree-compiler
+            debhelper dh-dkms device-tree-compiler \
+            libc6:arm64
 
       - name: Build arm64 package
         env:
