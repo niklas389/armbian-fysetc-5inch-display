@@ -5,9 +5,9 @@ Get the **Fysetc 5" MIPI-DSI touchscreen** (display **and** touch) working on th
 instead of BigTreeTech's legacy 4.19 vendor image. Everything ships as one
 Debian package.
 
-Display tested on Armbian (Debian 13 / Trixie minimal), kernels `6.18.35` and
-`6.18.44-current-rockchip64`. The touch protocol was analysed on that
-setup; the 1.3.0 poller has unit tests but has not yet been verified on hardware.
+Tested on Armbian 26.8.3 (Debian 13 / Trixie minimal), kernel
+`6.18.44-current-rockchip64`, with KlipperScreen: display, single and
+multi-touch (package 1.3.0).
 
 ---
 
@@ -72,6 +72,7 @@ sudo systemctl start ft5406-touch
 
 `-p` prints 20 frames: TD_STATUS (number of touches), the raw point records
 and the decoded points. With no finger on the panel, TD_STATUS must be `00`.
+The printed coordinates are the panel's raw values, before `-s`/`-X`/`-Y`.
 
 | Symptom | Fix |
 |---------|-----|
