@@ -1,0 +1,39 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/buildtools.mk
+include /usr/share/dpkg/pkg-info.mk
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+PKG := fysetc-5inch-dsi
+DKMS_SRC := usr/src/panel-raspberrypi-touchscreen-fysetc-$(DEB_VERSION_UPSTREAM)
+OVERLAY := rk3566-btt-pi2-dsi-rpi7
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) -C touch ft5406-touch CC="$(CC)" CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)"
+	dtc -@ -q -I dts -O dtb -o overlay/$(OVERLAY).dtbo overlay/$(OVERLAY).dts
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	$(MAKE) -C touch test CC_FOR_BUILD="$(CC_FOR_BUILD)"
+endif
+
+override_dh_auto_clean:
+	$(MAKE) -C touch clean
+	rm -f overlay/$(OVERLAY).dtbo
+
+override_dh_auto_install:
+	install -D -m 0755 touch/ft5406-touch debian/$(PKG)/usr/sbin/ft5406-touch
+	install -D -m 0644 touch/ft5406-touch.service debian/$(PKG)/usr/lib/systemd/system/ft5406-touch.service
+	install -D -m 0644 touch/ft5406-touch.default debian/$(PKG)/etc/default/ft5406-touch
+	install -D -m 0644 touch/modules-load.conf debian/$(PKG)/usr/lib/modules-load.d/$(PKG).conf
+	install -D -m 0644 overlay/$(OVERLAY).dtbo debian/$(PKG)/usr/lib/$(PKG)/$(OVERLAY).dtbo
+	install -D -m 0644 overlay/$(OVERLAY).dts debian/$(PKG)/usr/lib/$(PKG)/$(OVERLAY).dts
+	install -D -m 0644 -t debian/$(PKG)/$(DKMS_SRC) panel-driver/panel-raspberrypi-touchscreen.c panel-driver/Makefile
+
+override_dh_dkms:
+	dh_dkms -V $(DEB_VERSION_UPSTREAM) -- panel-driver/dkms.conf

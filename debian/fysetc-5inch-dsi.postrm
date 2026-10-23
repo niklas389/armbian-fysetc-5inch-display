@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+OVERLAY=rk3566-btt-pi2-dsi-rpi7
+ENV=/boot/armbianEnv.txt
+
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+	rm -f "/boot/overlay-user/$OVERLAY.dtbo"
+	if [ -f "$ENV" ]; then
+		sed -i -E -e "/^user_overlays=/{s/(=| )$OVERLAY( |\$)/\1\2/;s/  +/ /g;s/= /=/;s/ \$//}" "$ENV"
+	fi
+fi
+
+#DEBHELPER#
+
+exit 0

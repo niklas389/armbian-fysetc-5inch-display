@@ -1,0 +1,44 @@
+name: build-deb
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cross toolchain
+        run: |
+          dpkg --add-architecture arm64
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential crossbuild-essential-arm64 \
+            debhelper dh-dkms device-tree-compiler \
+            libc6:arm64
+
+      - name: Build arm64 package
+        env:
+          DEB_BUILD_OPTIONS: crossbuildcanrunhostbinaries
+        run: |
+          dpkg-buildpackage -aarm64 -b -us -uc
+          mkdir -p out && mv ../*.deb out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fysetc-5inch-dsi-deb
+          path: out/*.deb
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.deb

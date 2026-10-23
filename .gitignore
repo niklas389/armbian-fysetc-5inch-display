@@ -1,0 +1,10 @@
+/touch/ft5406-touch
+/touch/test_ft5406
+/overlay/*.dtbo
+/debian/fysetc-5inch-dsi/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.debhelper
+/debian/*.substvars
+/debian/*.debhelper.log

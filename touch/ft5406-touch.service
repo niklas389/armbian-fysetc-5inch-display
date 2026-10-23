@@ -1,0 +1,15 @@
+[Unit]
+Description=FT5406 userspace touchscreen (Fysetc 5" DSI panel)
+Documentation=https://github.com/niklas389/armbian-fysetc-5inch-display
+After=systemd-modules-load.service
+
+[Service]
+EnvironmentFile=-/etc/default/ft5406-touch
+ExecStartPre=-/sbin/modprobe -q uinput
+ExecStartPre=-/sbin/modprobe -q i2c-dev
+ExecStart=/usr/sbin/ft5406-touch $FT5406_TOUCH_OPTS
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

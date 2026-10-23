@@ -39,8 +39,13 @@
  *
  * This driver controls the TC358762 and ATTINY88, presenting a DSI
  * device with a drm_panel.
+ *
+ * Modified for the Fysetc 5" clone on BTT Pi2/CB2: panel timing, burst video
+ * mode, and an on/off backlight device (the clone's MCU only switches the
+ * backlight: REG_PWM 0x00 is off, 0xff is on, other values are ignored).
  */
 
+#include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
@@ -192,6 +197,7 @@ struct rpi_touchscreen {
 	struct drm_panel base;
 	struct mipi_dsi_device *dsi;
 	struct i2c_client *i2c;
+	struct backlight_device *backlight;
 };
 
 static const struct drm_display_mode rpi_touchscreen_modes[] = {
@@ -255,8 +261,7 @@ static int rpi_touchscreen_disable(struct drm_panel *panel)
 {
 	struct rpi_touchscreen *ts = panel_to_ts(panel);
 
-	rpi_touchscreen_i2c_write(ts, REG_PWM, 0);
-
+	/* The DRM core has already switched the backlight off. */
 	rpi_touchscreen_i2c_write(ts, REG_POWERON, 0);
 	udelay(1);
 
@@ -305,8 +310,7 @@ static int rpi_touchscreen_enable(struct drm_panel *panel)
 {
 	struct rpi_touchscreen *ts = panel_to_ts(panel);
 
-	/* Turn on the backlight. */
-	rpi_touchscreen_i2c_write(ts, REG_PWM, 255);
+	/* The DRM core switches the backlight on after this returns. */
 
 	/* Default to the same orientation as the closed source
 	 * firmware used for the panel.  Runtime rotation
@@ -356,6 +360,18 @@ static int rpi_touchscreen_get_modes(struct drm_panel *panel,
 	return num;
 }
 
+static int rpi_touchscreen_bl_update_status(struct backlight_device *bl)
+{
+	struct rpi_touchscreen *ts = bl_get_data(bl);
+
+	return i2c_smbus_write_byte_data(ts->i2c, REG_PWM,
+					 backlight_get_brightness(bl) ? 0xff : 0);
+}
+
+static const struct backlight_ops rpi_touchscreen_bl_ops = {
+	.update_status = rpi_touchscreen_bl_update_status,
+};
+
 static const struct drm_panel_funcs rpi_touchscreen_funcs = {
 	.disable = rpi_touchscreen_disable,
 	.unprepare = rpi_touchscreen_noop,
@@ -370,6 +386,11 @@ static int rpi_touchscreen_probe(struct i2c_client *i2c)
 	struct rpi_touchscreen *ts;
 	struct device_node *endpoint, *dsi_host_node;
 	struct mipi_dsi_host *host;
+	struct backlight_properties props = {
+		.type = BACKLIGHT_RAW,
+		.max_brightness = 1,
+		.brightness = 1,
+	};
 	int ver;
 	struct mipi_dsi_device_info info = {
 		.type = RPI_DSI_DRIVER_NAME,
@@ -405,6 +426,15 @@ static int rpi_touchscreen_probe(struct i2c_client *i2c)
 
 	/* Turn off at boot, so we can cleanly sequence powering on. */
 	rpi_touchscreen_i2c_write(ts, REG_POWERON, 0);
+
+	/* On/off only, see above. The DRM core switches it with the panel. */
+	ts->backlight = devm_backlight_device_register(dev, dev_name(dev), dev, ts,
+						       &rpi_touchscreen_bl_ops,
+						       &props);
+	if (IS_ERR(ts->backlight))
+		return dev_err_probe(dev, PTR_ERR(ts->backlight),
+				     "failed to register backlight\n");
+	ts->base.backlight = ts->backlight;
 
 	/* Look up the DSI host.  It needs to probe before we do. */
 	endpoint = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);

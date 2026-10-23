@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+# Migrate a manual install from before this package existed.
+if [ "$1" = install ]; then
+	if command -v dkms >/dev/null 2>&1; then
+		for v in 1.0-fysetc5 1.1-fysetc5; do
+			if dkms status -m panel-raspberrypi-touchscreen -v "$v" 2>/dev/null | grep -q .; then
+				echo "fysetc-5inch-dsi: removing manual DKMS module panel-raspberrypi-touchscreen/$v"
+				dkms remove -m panel-raspberrypi-touchscreen -v "$v" --all || true
+			fi
+			rm -rf "/usr/src/panel-raspberrypi-touchscreen-$v"
+		done
+	fi
+	unit=/etc/systemd/system/ft5406-touch.service
+	if [ -f "$unit" ] && [ ! -L "$unit" ] && grep -q '/usr/local/bin/ft5406-touch' "$unit"; then
+		echo "fysetc-5inch-dsi: disabling manual $unit (saved as $unit.pre-deb)"
+		if [ -d /run/systemd/system ]; then
+			systemctl disable --now ft5406-touch.service || true
+		fi
+		mv "$unit" "$unit.pre-deb"
+		rm -f /usr/local/bin/ft5406-touch
+		[ -d /run/systemd/system ] && systemctl daemon-reload || true
+	fi
+fi
+
+#DEBHELPER#
+
+exit 0
