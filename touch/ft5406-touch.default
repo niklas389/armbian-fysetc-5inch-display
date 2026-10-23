@@ -1,0 +1,14 @@
+# Options for the FT5406 touch poller (ft5406-touch.service).
+# After editing: sudo systemctl restart ft5406-touch
+#
+#   -b DEV     I2C bus device               (default /dev/i2c-2)
+#   -x W -y H  reported range, panel pixels (default 800 x 480)
+#   -W W -H H  controller raw range if it differs from -x/-y (scaled)
+#   -r HZ      poll rate; lower to 30 on EREMOTEIO errors (default 60)
+#   -R N       resolution in units/mm      (default 7, ~108x65 mm panel)
+#   -d N       frames a new contact must persist before touch-down (default 2)
+#   -s -X -Y   swap X/Y, invert X, invert Y (inversion is applied after swap)
+#   -v         dump every discarded frame to the journal
+#
+# Diagnostics (service stopped):  sudo ft5406-touch -p
+FT5406_TOUCH_OPTS="-b /dev/i2c-2 -x 800 -y 480 -r 60"

@@ -1,0 +1,12 @@
+fysetc-5inch-dsi (1.2.0) unstable; urgency=medium
+
+  * Package display overlay, DKMS panel driver and touch poller as one .deb.
+  * Touch poller: discard invalid controller frames (device mode, TD_STATUS,
+    duplicate IDs, out-of-range coordinates), debounce new contacts, emit only
+    changed values, release contacts on persistent read errors or garbage,
+    set axis resolution, refuse to run when a kernel driver owns 0x38, and
+    add a probe mode (-p) for raw register dumps.
+  * Panel driver build: build against the kernel DKMS targets instead of
+    the running kernel.
+
+ -- niklas389 <niklas389@users.noreply.github.com>  Fri, 23 Oct 2026 12:00:00 +0000

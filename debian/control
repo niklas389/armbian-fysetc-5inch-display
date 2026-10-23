@@ -1,0 +1,22 @@
+Source: fysetc-5inch-dsi
+Section: kernel
+Priority: optional
+Maintainer: niklas389 <niklas389@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), dh-sequence-dkms, device-tree-compiler
+Standards-Version: 4.7.0
+Homepage: https://github.com/niklas389/armbian-fystec-5inch-display
+Rules-Requires-Root: no
+
+Package: fysetc-5inch-dsi
+Architecture: arm64
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Recommends: linux-headers-current-rockchip64 | linux-headers-edge-rockchip64
+Description: Fysetc 5" DSI touchscreen support for BTT Pi2 / CB2 on Armbian
+ Display and touch support for the Fysetc 5" MIPI-DSI touchscreen
+ (Raspberry Pi 7" touchscreen clone) on the BigTreeTech Pi2 / CB2 (RK3566)
+ with mainline Armbian kernels:
+  - device-tree overlay enabling the DSI pipeline and I2C2,
+  - DKMS build of the raspberrypi-touchscreen panel driver with corrected
+    burst mode and panel timing, rebuilt on every kernel update,
+  - a polling FT5406 touch driver that exposes a uinput multitouch device.
+ The kernel headers for the running kernel must be installed for DKMS.

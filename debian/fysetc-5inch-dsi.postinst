@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+OVERLAY=rk3566-btt-pi2-dsi-rpi7
+ENV=/boot/armbianEnv.txt
+
+if [ "$1" = configure ]; then
+	if [ -f "$ENV" ]; then
+		install -D -m 0644 "/usr/lib/fysetc-5inch-dsi/$OVERLAY.dtbo" "/boot/overlay-user/$OVERLAY.dtbo"
+		if ! grep -Eq "^user_overlays=(.* )?$OVERLAY( |\$)" "$ENV"; then
+			if grep -q '^user_overlays=' "$ENV"; then
+				sed -i -e "s/^user_overlays=\(.*\)\$/user_overlays=\1 $OVERLAY/" \
+				       -e 's/^user_overlays= /user_overlays=/' "$ENV"
+			else
+				echo "user_overlays=$OVERLAY" >> "$ENV"
+			fi
+			echo "fysetc-5inch-dsi: overlay $OVERLAY enabled in $ENV"
+		fi
+		echo "fysetc-5inch-dsi: reboot to activate display and touch"
+	else
+		echo "fysetc-5inch-dsi: $ENV not found (not Armbian?); overlay NOT installed." >&2
+		echo "fysetc-5inch-dsi: apply /usr/lib/fysetc-5inch-dsi/$OVERLAY.dtbo manually." >&2
+	fi
+fi
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,14 @@
+panel-raspberrypi-touchscreen.c is a modified copy of the Linux kernel driver
+drivers/gpu/drm/panel/panel-raspberrypi-touchscreen.c
+
+  Copyright (c) 2016-2017 Broadcom (author: Eric Anholt)
+  Portions derived from panel-simple.c, Copyright (c) 2013 NVIDIA Corporation
+
+Modified 2026 for the Fysetc 5" panel (burst video mode, panel timing).
+
+It is licensed under the GNU General Public License, version 2 only
+(GPL-2.0-only): https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+The NVIDIA-derived portions are additionally available under the MIT terms
+reproduced in the file header. All original notices are retained in the file.
+
+The Makefile and dkms.conf in this directory are MIT (see ../LICENSE).
