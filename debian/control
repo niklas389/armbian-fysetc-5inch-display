@@ -18,5 +18,6 @@ Description: Fysetc 5" DSI touchscreen support for BTT Pi2 / CB2 on Armbian
   - device-tree overlay enabling the DSI pipeline and I2C2,
   - DKMS build of the raspberrypi-touchscreen panel driver with corrected
     burst mode and panel timing, rebuilt on every kernel update,
-  - a polling FT5406 touch driver that exposes a uinput multitouch device.
+  - a polling touch driver for the panel MCU at 0x38 (an FT5406 emulation
+   with a non-standard read protocol) that exposes a uinput multitouch device.
  The kernel headers for the running kernel must be installed for DKMS.

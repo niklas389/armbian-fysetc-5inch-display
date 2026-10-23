@@ -1,3 +1,16 @@
+fysetc-5inch-dsi (1.3.0) unstable; urgency=medium
+
+  * Touch poller: speak the Fysetc panel MCU's actual read protocol. The MCU
+    at 0x38 emulates an FT5x06, but only the first byte of a read comes from
+    the selected register; further bytes come from a 3-byte ring whose
+    pointer is never reset. Read TD_STATUS with 1-byte and points with 4-byte
+    reads, detect the ring phase from the data. Fixes phantom touches and
+    missing touch input.
+  * Invert both touch axes by default (-X -Y), as the panel reports them.
+  * Probe mode (-p) prints TD_STATUS, raw point records and decoded points.
+
+ -- niklas389 <niklas389@users.noreply.github.com>  Fri, 23 Oct 2026 18:00:00 +0000
+
 fysetc-5inch-dsi (1.2.0) unstable; urgency=medium
 
   * Package display overlay, DKMS panel driver and touch poller as one .deb.

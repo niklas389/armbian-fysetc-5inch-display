@@ -33,60 +33,116 @@ static int has_code(const struct evlog *l, int type, int code)
 	return 0;
 }
 
-/* frame with n points: {evt, id, x, y} */
-static void mkframe(uint8_t *buf, int n, const int (*p)[4])
+/*
+ * Emulation of the Fysetc panel MCU at 0x38: the register selects a record,
+ * the first byte comes from it, further bytes from a 3-entry ring
+ * (XL, YH, YL) with a global pointer that is never reset.
+ */
+struct mcu { uint8_t td; uint8_t rec[MAX_TOUCH][4]; int ptr; };
+
+static void mcu_read(struct mcu *m, uint8_t reg, uint8_t *buf, int len)
 {
-	memset(buf, 0xFF, FT_FRAME_LEN);
-	buf[0] = 0; buf[1] = 0; buf[2] = n;
-	for (int i = 0; i < n; i++) {
-		uint8_t *r = &buf[FT_REG_P1 + i * 6];
-		r[0] = (p[i][0] << 6) | ((p[i][2] >> 8) & 0x0F);
-		r[1] = p[i][2] & 0xFF;
-		r[2] = (p[i][1] << 4) | ((p[i][3] >> 8) & 0x0F);
-		r[3] = p[i][3] & 0xFF;
+	int r = 0;
+	if (reg == FT_REG_TD) buf[0] = m->td;
+	else { r = (reg - FT_REG_P1) / FT_STRIDE; buf[0] = m->rec[r][0]; }
+	for (int i = 1; i < len; i++) {
+		buf[i] = m->rec[r][1 + m->ptr];
+		m->ptr = (m->ptr + 1) % 3;
 	}
+}
+
+/* same sequence as read_frame() */
+static int mcu_frame(struct mcu *m, uint8_t *td, uint8_t (*rec)[FT_REC_LEN])
+{
+	mcu_read(m, FT_REG_TD, td, 1);
+	int n = ft_npoints(*td);
+	for (int i = 0; i < n; i++) mcu_read(m, FT_REG_P1 + i * FT_STRIDE, rec[i], FT_REC_LEN);
+	return n;
+}
+
+static void mcu_point(struct mcu *m, int i, int evt, int id, int x, int y)
+{
+	m->rec[i][0] = (evt << 6) | ((x >> 8) & 0x0F);
+	m->rec[i][1] = x & 0xFF;
+	m->rec[i][2] = (id << 4) | ((y >> 8) & 0x0F);
+	m->rec[i][3] = y & 0xFF;
 }
 
 static const struct cfg C = { .raw_w = 800, .raw_h = 480, .out_w = 800, .out_h = 480, .debounce = 2 };
 
 static void test_parse(void)
 {
-	uint8_t b[FT_FRAME_LEN];
 	struct ft_point pts[MAX_TOUCH];
+	int phase;
 
-	mkframe(b, 0, NULL);
-	assert(ft_parse(b, 800, 480, pts) == 0);
+	/* bytes captured on the board, finger at the screen centre: the 3 ring
+	 * bytes in two rotations decode to the same point (393, 240) */
+	const uint8_t cap0[1][4] = { { 0x81, 0x89, 0x00, 0xf0 } };
+	const uint8_t cap2[1][4] = { { 0x81, 0x00, 0xf0, 0x89 } };
+	phase = 0;
+	assert(ft_parse(0x01, cap0, &phase, 800, 480, pts) == 1);
+	assert(phase == 0 && pts[0].id == 0 && pts[0].x == 393 && pts[0].y == 240);
+	assert(ft_parse(0x01, cap2, &phase, 800, 480, pts) == 1);
+	assert(phase == 2 && pts[0].x == 393 && pts[0].y == 240);
 
-	const int one[][4] = { { EVT_CONTACT, 0, 100, 200 } };
-	mkframe(b, 1, one);
-	assert(ft_parse(b, 800, 480, pts) == 1);
-	assert(pts[0].id == 0 && pts[0].x == 100 && pts[0].y == 200);
+	/* idle: no records */
+	assert(ft_parse(0x00, cap0, &phase, 800, 480, pts) == 0);
+
+	/* TD_STATUS: reserved bits, more than 10 points */
+	assert(ft_npoints(0x43) == -1 && ft_npoints(0x14) == -1 && ft_npoints(11) == -1);
+	assert(ft_npoints(7) == MAX_TOUCH);
+
+	/* no phase fits: every rotation has an ID >= 5 or y >= 480 */
+	const uint8_t bad[1][4] = { { 0x81, 0x77, 0x88, 0x99 } };
+	phase = 1;
+	assert(ft_parse(0x01, bad, &phase, 800, 480, pts) == -1 && phase == 1);
 
 	/* lift-off and empty records produce no point */
-	const int up[][4] = { { EVT_UP, 0, 100, 200 }, { EVT_NONE, 0xF, 0xFFF, 0xFFF } };
-	mkframe(b, 2, up);
-	assert(ft_parse(b, 800, 480, pts) == 0);
+	const uint8_t up[2][4] = { { 0x41, 0x89, 0x00, 0xf0 }, { 0xff, 0xff, 0xff, 0xff } };
+	phase = 0;
+	assert(ft_parse(0x02, up, &phase, 800, 480, pts) == 0);
+}
 
-	/* out of range, duplicate ID, bad mode, reserved TD_STATUS bits, > 10 points */
-	const int oor[][4] = { { EVT_CONTACT, 4, 2049, 1800 } };
-	mkframe(b, 1, oor);
-	assert(ft_parse(b, 800, 480, pts) == -1);
-	const int dup[][4] = { { EVT_CONTACT, 1, 10, 10 }, { EVT_CONTACT, 1, 20, 20 } };
-	mkframe(b, 2, dup);
-	assert(ft_parse(b, 800, 480, pts) == -1);
-	mkframe(b, 1, one); b[0] = 0x40;
-	assert(ft_parse(b, 800, 480, pts) == -1);
-	mkframe(b, 1, one); b[2] = 0x41;
-	assert(ft_parse(b, 800, 480, pts) == -1);
-	mkframe(b, 0, NULL); b[2] = 11;
-	assert(ft_parse(b, 800, 480, pts) == -1);
-
-	/* the phantom stream from the field log: repeating 08 01 47, 1-byte phase shift */
-	static const uint8_t pat[3] = { 0x08, 0x01, 0x47 };
-	for (int phase = 0; phase < 3; phase++) {
-		for (int i = 0; i < FT_FRAME_LEN; i++) b[i] = pat[(i + phase) % 3];
-		assert(ft_parse(b, 800, 480, pts) == -1);
+static void test_mcu_ring(void)
+{
+	/* every starting ring position, two fingers: the phase is found once and
+	 * stays put, coordinates are exact */
+	for (int start = 0; start < 3; start++) {
+		struct mcu m; memset(&m, 0, sizeof(m));
+		m.ptr = start;
+		m.td = 2;
+		mcu_point(&m, 0, EVT_CONTACT, 0, 393, 240);
+		mcu_point(&m, 1, EVT_CONTACT, 1, 758, 37);
+		uint8_t td, rec[MAX_TOUCH][FT_REC_LEN];
+		struct ft_point pts[MAX_TOUCH];
+		int phase = 0, first = -1;
+		for (int f = 0; f < 10; f++) {
+			int n = mcu_frame(&m, &td, rec);
+			assert(n == 2);
+			assert(ft_parse(td, (const uint8_t (*)[FT_REC_LEN])rec, &phase, 800, 480, pts) == 2);
+			if (first < 0) first = phase;
+			assert(phase == first);
+			assert(pts[0].x == 393 && pts[0].y == 240);
+			assert(pts[1].x == 758 && pts[1].y == 37);
+			/* idle frames in between don't move the ring */
+			m.td = 0; assert(mcu_frame(&m, &td, rec) == 0); m.td = 2;
+		}
 	}
+
+	/* a foreign multi-byte read shifts the ring: the phase is re-found */
+	struct mcu m; memset(&m, 0, sizeof(m));
+	m.td = 1;
+	mcu_point(&m, 0, EVT_CONTACT, 0, 393, 240);
+	uint8_t td, rec[MAX_TOUCH][FT_REC_LEN], junk[33];
+	struct ft_point pts[MAX_TOUCH];
+	int phase = 0;
+	mcu_frame(&m, &td, rec);
+	assert(ft_parse(td, (const uint8_t (*)[FT_REC_LEN])rec, &phase, 800, 480, pts) == 1);
+	int before = phase;
+	mcu_read(&m, 0x00, junk, 33);           /* 32 ring bytes: shift by 2 */
+	mcu_frame(&m, &td, rec);
+	assert(ft_parse(td, (const uint8_t (*)[FT_REC_LEN])rec, &phase, 800, 480, pts) == 1);
+	assert(phase != before && pts[0].x == 393 && pts[0].y == 240);
 }
 
 static void test_tap_and_hold(void)
@@ -142,6 +198,7 @@ static void test_transform(void)
 int main(void)
 {
 	test_parse();
+	test_mcu_ring();
 	test_tap_and_hold();
 	test_alternating_ids_filtered();
 	test_transform();

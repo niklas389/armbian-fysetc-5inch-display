@@ -6,8 +6,8 @@ instead of BigTreeTech's legacy 4.19 vendor image. Everything ships as one
 Debian package.
 
 Display tested on Armbian (Debian 13 / Trixie minimal), kernels `6.18.35` and
-`6.18.44-current-rockchip64`. The reworked touch poller (1.2.0) has unit tests,
-but has not been verified on hardware yet.
+`6.18.44-current-rockchip64`. The touch protocol was analysed on that
+setup; the 1.3.0 poller has unit tests but has not yet been verified on hardware.
 
 ---
 
@@ -29,7 +29,7 @@ The package:
 |------|--------------|
 | Display overlay | Installs `rk3566-btt-pi2-dsi-rpi7.dtbo` to `/boot/overlay-user/` and adds it to `user_overlays` in `/boot/armbianEnv.txt`. |
 | Panel driver | DKMS module `panel-raspberrypi-touchscreen-fysetc`: overrides the in-tree driver with burst video mode and the Fysetc timing. It is rebuilt automatically when Armbian installs a new kernel. |
-| Touch | `ft5406-touch.service`: polls the FT5406 over `/dev/i2c-2` and provides a multitouch device via `uinput`. Options are in `/etc/default/ft5406-touch`. |
+| Touch | `ft5406-touch.service`: polls the touch MCU over `/dev/i2c-2` and provides a multitouch device via `uinput`. Options are in `/etc/default/ft5406-touch`. |
 
 **The kernel headers metapackage must stay installed.** DKMS can only rebuild the
 panel driver for a new kernel if its headers are installed. Without them, a kernel
@@ -62,37 +62,46 @@ sudo libinput debug-events                                 # taps produce one DO
 
 ## Touch troubleshooting
 
-Stop the service and dump the controller registers:
+Stop the service and look at what the panel reports:
 
 ```sh
 sudo systemctl stop ft5406-touch
-sudo ft5406-touch -p
+sudo ft5406-touch -p          # touch the panel while it runs
 sudo systemctl start ft5406-touch
 ```
 
-`-p` prints the chip ID, firmware, power-mode registers and 10 raw frames
-(`0x00`–`0x20`). It marks each frame `valid` or `INVALID`. **With no finger on the
-panel, byte 2 (TD_STATUS) must be `00`.**
-
-The poller discards every frame that is not a plausible FT5x06 frame:
-
-- device mode is not "working",
-- the reserved TD_STATUS bits are set or it reports more than 10 points,
-- duplicate touch IDs,
-- coordinates outside the controller range (`-W`/`-H`, default `-x`/`-y`).
-
-A new contact must also be present in 2 consecutive valid frames (`-d`) before it
-is reported. After 5 consecutive unreadable or invalid frames, all contacts are
-released. The journal (`journalctl -u ft5406-touch`) shows how many frames were
-discarded; add `-v` in `/etc/default/ft5406-touch` to dump each one.
+`-p` prints 20 frames: TD_STATUS (number of touches), the raw point records
+and the decoded points. With no finger on the panel, TD_STATUS must be `00`.
 
 | Symptom | Fix |
 |---------|-----|
+| Touch mirrored | The default is `-X -Y` (both axes inverted, as the panel reports them). Remove one or both in `/etc/default/ft5406-touch`. |
+| Touch rotated | `-s` swaps X/Y; `-X`/`-Y` are applied after the swap. |
 | `i2c read errors` in the journal (EREMOTEIO) | Lower the poll rate: `-r 30`. |
-| `address 0x38 ... claimed by a kernel driver` | A DT node binds `edt-ft5x06` to `2-0038`; remove it. Both drivers would read the chip concurrently. |
-| Axes mirrored or rotated | `-s` swaps X/Y, `-X`/`-Y` invert (applied after the swap). |
-| Touch works only in part of the screen | The controller range differs from 800x480: set `-W`/`-H` to its range. |
-| Many `invalid frame(s)` while idle | The controller or the bus returns garbage: post the `-p` output in an issue. |
+| `address 0x38 ... claimed by a kernel driver` | A DT node binds `edt-ft5x06` to `2-0038`; remove it. A second reader shifts the panel's ring pointer. |
+| Many `invalid frame(s)` | Post the `-p` output (with and without a finger) in an issue. |
+
+### Why the stock driver cannot work
+
+The device at `0x38` is not a FocalTech chip: an MCU on the Fysetc board
+emulates the FT5x06 register map, but multi-byte reads do not follow it.
+
+- The register selects a record: `0x02` TD_STATUS, `0x03 + 6*i` point *i*.
+- Only the first byte of a read comes from that record (TD_STATUS or XH).
+- Every further byte comes from a 3-entry ring (XL, YH, YL) whose read pointer
+  advances with every byte and is never reset, not by STOP and not by a new
+  register address.
+
+`edt-ft5x06` reads long blocks, gets bytes from the wrong ring position and
+reports ghost touches. The poller reads TD_STATUS with 1-byte reads and each
+point with exactly 4 bytes (3 ring bytes: the phase stays constant), finds the
+phase from the data and re-checks it on every frame. Every frame is also
+validated (reserved TD_STATUS bits, IDs, coordinate range), and a new contact
+must persist for 2 frames (`-d`) before it is reported.
+
+This read behaviour was first documented by
+[kkobold/fysetc-5inch-dsi-touch](https://github.com/kkobold/fysetc-5inch-dsi-touch)
+(a kernel driver for Raspberry Pi OS) and confirmed on the BTT CB2.
 
 ---
 
@@ -104,7 +113,8 @@ The Fysetc 5" is electrically a **Raspberry Pi 7" DSI touchscreen clone**:
 
 - MIPI-DSI **TC358762**-class DSI→DPI bridge.
 - Panel power/backlight **MCU at I2C `0x45`** (RPi "Attiny" protocol).
-- **FocalTech FT5406** capacitive touch at I2C `0x38`.
+- Touch at I2C `0x38`: an MCU emulating a FocalTech FT5406, with a
+  non-standard read protocol (see [Touch troubleshooting](#touch-troubleshooting)).
 
 The 15-pin DSI FFC carries only 1 clock lane, 2 data lanes, **I2C2 (SCL/SDA)**,
 3V3 and GND. There is **no interrupt or reset pin**, so the touch controller can
@@ -141,7 +151,7 @@ flags: NHSYNC, NVSYNC ; MIPI video BURST mode
 overlay/       rk3566-btt-pi2-dsi-rpi7.dts      device-tree overlay (display + i2c2)
 panel-driver/  panel-raspberrypi-touchscreen.c  DKMS driver (burst + Fysetc timing)
                Makefile  dkms.conf
-touch/         ft5406_touch.c                   userspace FT5406 -> uinput poller
+touch/         ft5406_touch.c                   userspace touch poller (0x38 -> uinput)
                test_ft5406.c                    parser/tracker unit tests (make test)
                ft5406-touch.service  ft5406-touch.default  modules-load.conf
 debian/        packaging (dh + dh-dkms)

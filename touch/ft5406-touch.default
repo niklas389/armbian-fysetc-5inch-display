@@ -8,7 +8,9 @@
 #   -R N       resolution in units/mm      (default 7, ~108x65 mm panel)
 #   -d N       frames a new contact must persist before touch-down (default 2)
 #   -s -X -Y   swap X/Y, invert X, invert Y (inversion is applied after swap)
+#              The panel reports both axes inverted (as the official 7"), so
+#              -X -Y is the default; remove them if touch is mirrored.
 #   -v         dump every discarded frame to the journal
 #
 # Diagnostics (service stopped):  sudo ft5406-touch -p
-FT5406_TOUCH_OPTS="-b /dev/i2c-2 -x 800 -y 480 -r 60"
+FT5406_TOUCH_OPTS="-b /dev/i2c-2 -x 800 -y 480 -r 60 -X -Y"

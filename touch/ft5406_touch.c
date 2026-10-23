@@ -1,24 +1,36 @@
 /*
- * ft5406_touch.c — userspace polled FocalTech FT5x06/FT5406 -> uinput
+ * ft5406_touch.c — userspace polled touch driver for the Fysetc 5" DSI panel
  *
- * For BigTreeTech Pi2 / CB2 with an RPi-DSI-style 5"/7" panel.
- * The touch controller (FT5406 @ I2C2 addr 0x38) has NO interrupt line broken
- * out on the 15-pin DSI FFC, so the mainline interrupt-driven edt-ft5x06 driver
- * cannot be used. This polls the controller over /dev/i2c-2 and injects a
- * standard multitouch-B device via /dev/uinput. No kernel module, survives
- * kernel upgrades.
+ * For BigTreeTech Pi2 / CB2 with the Fysetc 5" RPi-DSI-clone panel.
+ * The touch device at I2C2 addr 0x38 has NO interrupt line broken out on the
+ * 15-pin DSI FFC, and mainline edt-ft5x06 has no polling mode, so this polls
+ * it over /dev/i2c-2 and injects a standard multitouch-B device via
+ * /dev/uinput. No kernel module, survives kernel upgrades.
  *
- * Every frame is validated before use: a frame with a non-working device mode,
- * reserved TD_STATUS bits set, more points than the chip supports, duplicate
- * touch IDs or out-of-range coordinates is discarded as a whole. A new contact
- * must be seen in <debounce> consecutive valid frames before it is reported.
+ * The device is not a real FT5406: an MCU on the panel emulates the FT5x06
+ * register map, but multi-byte reads do not follow it (behaviour documented
+ * by https://github.com/kkobold/fysetc-5inch-dsi-touch, confirmed on this
+ * board):
+ *   - the register selects a record: 0x02 TD_STATUS, 0x03 + 6*i point i;
+ *   - only the first byte read comes from that record (TD_STATUS or XH);
+ *   - every further byte comes from a 3-entry ring (XL, YH, YL) whose read
+ *     pointer advances per byte and is never reset (not by STOP, not by a
+ *     new register address).
+ * So TD_STATUS is read with 1-byte reads and each point with exactly 4 bytes:
+ * 3 ring bytes per read keep the ring phase constant. The phase is found from
+ * the data (ID and coordinates must be plausible) and re-checked every frame.
+ *
+ * Every frame is validated before use: reserved TD_STATUS bits, more points
+ * than supported, duplicate IDs or out-of-range coordinates at every ring
+ * phase discard the frame. A new contact must be seen in <debounce>
+ * consecutive valid frames before it is reported.
  *
  * Build:  gcc -O2 -Wall -o ft5406-touch ft5406_touch.c
- * Run:    ./ft5406-touch -b /dev/i2c-2 -x 800 -y 480 -r 60
+ * Run:    ./ft5406-touch -b /dev/i2c-2 -x 800 -y 480 -r 60 -X -Y
  * Flags:  -s swap X/Y   -X invert X   -Y invert Y   -r poll Hz   -a addr
  *         -W/-H controller raw range (default = -x/-y, scaled to -x/-y)
  *         -R resolution in units/mm   -d debounce frames   -v verbose
- *         -p probe: print chip ID registers and raw frames, then exit
+ *         -p probe: print raw records and decoded points, then exit
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,49 +47,84 @@
 #include <linux/i2c-dev.h>
 #include <linux/uinput.h>
 
-#define MAX_TOUCH    5                    /* slots exposed via uinput */
-#define FT_MAX_POINTS 10                  /* FT5406 tracks up to 10 */
-#define FT_REG_MODE  0x00
+#define MAX_TOUCH    5                    /* points the panel MCU reports */
+#define FT_MAX_POINTS 10                  /* TD_STATUS upper bound (FT5x06) */
 #define FT_REG_TD    0x02
 #define FT_REG_P1    0x03
-#define FT_FRAME_LEN (FT_REG_P1 + MAX_TOUCH * 6)   /* 0x00..0x20 */
+#define FT_STRIDE    6                    /* register distance between points */
+#define FT_REC_LEN   4                    /* XH + 3 ring bytes */
+#define FT_RING      3
 #define MAX_BAD      5                    /* bad frames before releasing all */
 
 enum { EVT_DOWN = 0, EVT_UP = 1, EVT_CONTACT = 2, EVT_NONE = 3 };
 
 struct ft_point { int id, x, y; };
 
-/*
- * Parse one register frame (0x00..0x20). Returns the number of points written
- * to pts, or -1 if the frame is not a plausible FT5x06 frame.
- */
-static int ft_parse(const uint8_t *buf, int raw_w, int raw_h, struct ft_point *pts)
+/* Number of point records announced by TD_STATUS, or -1 if implausible. */
+static int ft_npoints(uint8_t td)
 {
-	if (buf[FT_REG_MODE] & 0x70) return -1;         /* not in working mode */
-	if (buf[FT_REG_TD] & 0xF0) return -1;           /* reserved bits set */
-	int n = buf[FT_REG_TD] & 0x0F;
+	if (td & 0xF0) return -1;               /* reserved bits set */
+	int n = td & 0x0F;
 	if (n > FT_MAX_POINTS) return -1;
-	if (n > MAX_TOUCH) n = MAX_TOUCH;
+	return n > MAX_TOUCH ? MAX_TOUCH : n;
+}
 
+/* rec = XH followed by 3 ring bytes; phase = position of XL among them */
+static void ft_decode(const uint8_t *rec, int phase, int *evt, int *id, int *x, int *y)
+{
+	uint8_t xh = rec[0];
+	uint8_t xl = rec[1 + phase % FT_RING];
+	uint8_t yh = rec[1 + (phase + 1) % FT_RING];
+	uint8_t yl = rec[1 + (phase + 2) % FT_RING];
+	*evt = (xh >> 6) & 0x03;
+	*id = (yh >> 4) & 0x0F;
+	*x = ((xh & 0x0F) << 8) | xl;
+	*y = ((yh & 0x0F) << 8) | yl;
+}
+
+/* Decode n records at one ring phase. Returns points written, or -1. */
+static int ft_decode_frame(const uint8_t (*rec)[FT_REC_LEN], int n, int phase,
+			   int raw_w, int raw_h, struct ft_point *pts)
+{
 	int cnt = 0;
 	unsigned seen = 0;
 	for (int i = 0; i < n; i++) {
-		const uint8_t *p = &buf[FT_REG_P1 + i * 6];
-		int evt = (p[0] >> 6) & 0x03;
-		int x = ((p[0] & 0x0F) << 8) | p[1];
-		int y = ((p[2] & 0x0F) << 8) | p[3];
-		int id = (p[2] >> 4) & 0x0F;
-		if (evt == EVT_NONE) continue;          /* empty record, ID may be 0xF */
-		if (id >= FT_MAX_POINTS) return -1;
+		int evt, id, x, y;
+		ft_decode(rec[i], phase, &evt, &id, &x, &y);
+		if (evt == EVT_NONE) continue;          /* empty record */
+		if (id >= MAX_TOUCH || x >= raw_w || y >= raw_h) return -1;
 		if (seen & (1u << id)) return -1;       /* duplicate ID */
 		seen |= 1u << id;
 		if (evt == EVT_UP) continue;
-		if (x >= raw_w || y >= raw_h) return -1;
-		if (id >= MAX_TOUCH) continue;          /* beyond exposed slots */
 		pts[cnt].id = id; pts[cnt].x = x; pts[cnt].y = y;
 		cnt++;
 	}
 	return cnt;
+}
+
+/*
+ * Parse one frame: TD_STATUS and the records it announced. The current ring
+ * phase is tried first; otherwise *phase moves to the one other phase that
+ * fits. Returns the number of points written to pts, or -1 if the frame is
+ * implausible or ambiguous.
+ */
+static int ft_parse(uint8_t td, const uint8_t (*rec)[FT_REC_LEN], int *phase,
+		    int raw_w, int raw_h, struct ft_point *pts)
+{
+	int n = ft_npoints(td);
+	if (n <= 0) return n;
+	int cnt = ft_decode_frame(rec, n, *phase, raw_w, raw_h, pts);
+	if (cnt >= 0) return cnt;
+
+	int found = -1;
+	for (int p = 0; p < FT_RING; p++) {
+		if (p == *phase || ft_decode_frame(rec, n, p, raw_w, raw_h, pts) < 0) continue;
+		if (found >= 0) return -1;              /* ambiguous */
+		found = p;
+	}
+	if (found < 0) return -1;
+	*phase = found;
+	return ft_decode_frame(rec, n, found, raw_w, raw_h, pts);
 }
 
 struct cfg {
@@ -183,43 +230,46 @@ static int i2c_read_block(int fd, uint8_t reg, uint8_t *buf, int len) {
 	return ioctl(fd, I2C_RDWR, &xfer);
 }
 
-static void dump(const char *tag, const uint8_t *buf, int len) {
-	fprintf(stderr, "%s", tag);
-	for (int i = 0; i < len; i++) fprintf(stderr, " %02x", buf[i]);
+/*
+ * Read TD_STATUS (1 byte, keeps the ring still) and the point records it
+ * announces (4 bytes each, ring phase unchanged). Returns the number of
+ * records read, -1 on an I2C error, -2 if TD_STATUS is implausible.
+ */
+static int read_frame(int fd, uint8_t *td, uint8_t (*rec)[FT_REC_LEN]) {
+	if (i2c_read_block(fd, FT_REG_TD, td, 1) < 0) return -1;
+	int n = ft_npoints(*td);
+	if (n < 0) return -2;
+	for (int i = 0; i < n; i++)
+		if (i2c_read_block(fd, FT_REG_P1 + i * FT_STRIDE, rec[i], FT_REC_LEN) < 0) return -1;
+	return n;
+}
+
+static void dump_frame(const char *tag, uint8_t td, const uint8_t (*rec)[FT_REC_LEN], int n) {
+	fprintf(stderr, "%s TD_STATUS %02x", tag, td);
+	for (int i = 0; i < n; i++)
+		fprintf(stderr, " | %02x %02x %02x %02x", rec[i][0], rec[i][1], rec[i][2], rec[i][3]);
 	fputc('\n', stderr);
 }
 
 static int probe(int fd, const struct cfg *c) {
-	static const struct { uint8_t reg; const char *name; } regs[] = {
-		{ 0x80, "ID_G_THGROUP (touch threshold)" },
-		{ 0x86, "ID_G_CTRL (0=keep active, 1=auto monitor)" },
-		{ 0x88, "ID_G_PERIODACTIVE (report rate)" },
-		{ 0xA3, "ID_G_CIPHER (chip ID)" },
-		{ 0xA5, "ID_G_PMODE (power mode)" },
-		{ 0xA6, "ID_G_FIRMID (firmware)" },
-		{ 0xA8, "ID_G_FT5201ID (vendor, FocalTech=0x11)" },
-	};
-	uint8_t buf[FT_FRAME_LEN];
-	int rc = 0;
-	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
-		if (i2c_read_block(fd, regs[i].reg, buf, 1) < 0) {
-			fprintf(stderr, "0x%02x %-44s read error: %s\n", regs[i].reg, regs[i].name, strerror(errno));
-			rc = 1;
-		} else {
-			fprintf(stderr, "0x%02x %-44s 0x%02x\n", regs[i].reg, regs[i].name, buf[0]);
-		}
-	}
-	fprintf(stderr, "\n10 raw frames (0x00..0x%02x), 100 ms apart:\n", FT_FRAME_LEN - 1);
-	for (int i = 0; i < 10; i++) {
-		if (i2c_read_block(fd, 0x00, buf, FT_FRAME_LEN) < 0) {
+	uint8_t td, rec[MAX_TOUCH][FT_REC_LEN];
+	struct ft_point pts[MAX_TOUCH];
+	int phase = 0, rc = 0;
+	fprintf(stderr, "20 frames, 200 ms apart (touch the panel meanwhile):\n");
+	for (int f = 0; f < 20; f++) {
+		int n = read_frame(fd, &td, rec);
+		if (n == -1) {
 			fprintf(stderr, "read error: %s\n", strerror(errno));
 			rc = 1;
+		} else if (n == -2) {
+			fprintf(stderr, "INVALID TD_STATUS %02x\n", td);
 		} else {
-			struct ft_point pts[MAX_TOUCH];
-			int n = ft_parse(buf, c->raw_w, c->raw_h, pts);
-			dump(n < 0 ? "INVALID" : "valid  ", buf, FT_FRAME_LEN);
+			int cnt = ft_parse(td, (const uint8_t (*)[FT_REC_LEN])rec, &phase, c->raw_w, c->raw_h, pts);
+			dump_frame(cnt < 0 ? "INVALID" : "valid  ", td, (const uint8_t (*)[FT_REC_LEN])rec, n);
+			for (int i = 0; i < cnt; i++)
+				fprintf(stderr, "        ring phase %d: id %d x %d y %d\n", phase, pts[i].id, pts[i].x, pts[i].y);
 		}
-		usleep(100000);
+		usleep(200000);
 	}
 	return rc;
 }
@@ -334,26 +384,29 @@ int main(int argc, char **argv) {
 
 	struct tracker t; memset(&t, 0, sizeof(t)); t.next_tid = 1;
 	struct ft_point pts[MAX_TOUCH];
-	uint8_t buf[FT_FRAME_LEN];
+	uint8_t td, rec[MAX_TOUCH][FT_REC_LEN];
 	long period = 1000000000L / hz;
-	int bad = 0;
+	int bad = 0, phase = 0;
 	unsigned long n_ioerr = 0, n_invalid = 0;
 	struct timespec next;
 	clock_gettime(CLOCK_MONOTONIC, &next);
 
 	while (!stop) {
-		int n;
-		if (i2c_read_block(i2c, 0x00, buf, FT_FRAME_LEN) < 0) {
-			/* FT5406 dislikes very frequent polling -> EREMOTEIO(-6); retry */
+		int n = read_frame(i2c, &td, rec);
+		if (n == -1) {
+			/* the panel MCU dislikes very frequent polling -> EREMOTEIO(-6); retry */
 			n_ioerr++;
 			if ((n_ioerr & (n_ioerr - 1)) == 0)             /* log 1, 2, 4, 8, ... */
 				fprintf(stderr, "i2c read errors so far: %lu (last: %s)\n", n_ioerr, strerror(errno));
-			n = -1;
 		} else {
-			n = ft_parse(buf, c.raw_w, c.raw_h, pts);
+			int old_phase = phase;
+			if (n >= 0) n = ft_parse(td, (const uint8_t (*)[FT_REC_LEN])rec, &phase, c.raw_w, c.raw_h, pts);
+			if (phase != old_phase)
+				fprintf(stderr, "ring phase %d -> %d\n", old_phase, phase);
 			if (n < 0) {
 				n_invalid++;
-				if (verbose) dump("invalid frame:", buf, FT_FRAME_LEN);
+				if (verbose) dump_frame("invalid frame:", td, (const uint8_t (*)[FT_REC_LEN])rec,
+							ft_npoints(td) < 0 ? 0 : ft_npoints(td));
 				else if ((n_invalid & (n_invalid - 1)) == 0)
 					fprintf(stderr, "discarded %lu invalid frame(s) so far (-v to dump)\n", n_invalid);
 			}
