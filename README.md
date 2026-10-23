@@ -14,7 +14,7 @@ multi-touch (package 1.3.0).
 ## Install
 
 1. Download `fysetc-5inch-dsi_<version>_arm64.deb` from the
-   [releases](https://github.com/niklas389/armbian-fystec-5inch-display/releases)
+   [releases](https://github.com/niklas389/armbian-fysetc-5inch-display/releases)
    (or the `build-deb` workflow artifacts).
 2. Install it together with the kernel headers:
 
@@ -81,6 +81,21 @@ The printed coordinates are the panel's raw values, before `-s`/`-X`/`-Y`.
 | `i2c read errors` in the journal (EREMOTEIO) | Lower the poll rate: `-r 30`. |
 | `address 0x38 ... claimed by a kernel driver` | A DT node binds `edt-ft5x06` to `2-0038`; remove it. A second reader shifts the panel's ring pointer. |
 | Many `invalid frame(s)` | Post the `-p` output (with and without a finger) in an issue. |
+
+### Backlight
+
+The panel's MCU only switches the backlight: brightness levels are not
+supported by the hardware (`REG_PWM` `0x00` is off, `0xff` is on, other values
+are ignored). The panel driver therefore exposes an on/off backlight device:
+
+```sh
+ls /sys/class/backlight/                           # 2-0045
+echo 0 | sudo tee /sys/class/backlight/2-0045/brightness   # off
+echo 1 | sudo tee /sys/class/backlight/2-0045/brightness   # on
+```
+
+Screen blanking (DPMS, e.g. the KlipperScreen screen timeout) switches the
+backlight off together with the panel and back on at wake.
 
 ### Why the stock driver cannot work
 

@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: armbian-fystec-5inch-display
-Source: https://github.com/niklas389/armbian-fystec-5inch-display
+Upstream-Name: armbian-fysetc-5inch-display
+Source: https://github.com/niklas389/armbian-fysetc-5inch-display
 
 Files: *
 Copyright: 2026 niklas389

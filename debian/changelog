@@ -1,3 +1,14 @@
+fysetc-5inch-dsi (1.4.0) unstable; urgency=medium
+
+  * Panel driver: register an on/off backlight device (max_brightness 1).
+    The Fysetc MCU only switches the backlight (REG_PWM 0x00 off, 0xff on,
+    other values ignored). The DRM core switches it with the panel, so
+    screen blanking (DPMS) turns the backlight off and the user setting
+    survives a wake.
+  * Repository renamed to armbian-fysetc-5inch-display.
+
+ -- niklas389 <niklas389@users.noreply.github.com>  Fri, 23 Oct 2026 20:00:00 +0000
+
 fysetc-5inch-dsi (1.3.0) unstable; urgency=medium
 
   * Touch poller: speak the Fysetc panel MCU's actual read protocol. The MCU

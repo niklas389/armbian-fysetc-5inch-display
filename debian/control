@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: niklas389 <niklas389@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13), dh-sequence-dkms, device-tree-compiler
 Standards-Version: 4.7.0
-Homepage: https://github.com/niklas389/armbian-fystec-5inch-display
+Homepage: https://github.com/niklas389/armbian-fysetc-5inch-display
 Rules-Requires-Root: no
 
 Package: fysetc-5inch-dsi

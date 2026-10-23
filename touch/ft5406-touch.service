@@ -1,6 +1,6 @@
 [Unit]
 Description=FT5406 userspace touchscreen (Fysetc 5" DSI panel)
-Documentation=https://github.com/niklas389/armbian-fystec-5inch-display
+Documentation=https://github.com/niklas389/armbian-fysetc-5inch-display
 After=systemd-modules-load.service
 
 [Service]
